@@ -24,8 +24,10 @@ with col_controls:
     st.markdown("### Operational Status")
     status_indicator = st.empty()
 
-# --- Initialize MediaPipe Solutions ---
-mp_face_mesh = mp.solutions.face_mesh
+# --- Initialize MediaPipe Solutions Safely ---
+# Explicit direct path utilized to fix the Python 3.14 Submodule Import Bug
+import mediapipe.python.solutions.face_mesh as mp_face_mesh
+
 face_mesh = mp_face_mesh.FaceMesh(
     max_num_faces=1,
     refine_landmarks=True,
