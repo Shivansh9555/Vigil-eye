@@ -27,7 +27,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if "system_logs" not in st.session_state:
-    st.session_state.system_logs = f"[{time.strftime('%H:%M:%S')}] INITIALIZATION: Vigil-Eye platform active. Optimization algorithms enabled."
+    st.session_state.system_logs = f"[{time.strftime('%H:%M:%S')}] INITIALIZATION: Streamlit resource optimization active."
 
 st.markdown('<div class="main-title">Vigil-Eye Terminal</div>', unsafe_allow_html=True)
 st.markdown(
@@ -39,11 +39,11 @@ st.markdown(
 with st.sidebar:
     st.markdown("### System Constants")
     close_thresh = st.slider("EAR Threshold Limit", min_value=0.15, max_value=0.35, value=0.22, step=0.01)
-    frame_thresh = st.slider("Consecutive Frame Upper Bound", min_value=5, max_value=30, value=15, step=1)
+    frame_thresh = st.slider("Consecutive Frame Upper Bound", min_value=5, max_value=30, value=10, step=1)
     
     st.markdown("---")
     st.markdown("### Resource Control")
-    st.caption("CPU Throttle Mitigation: Enabled. Processing limited to ~15 FPS to remain within cloud platform health rules.")
+    st.caption("Free Tier Mode: Low-Power Processing enabled to prevent server-side CPU throttling.")
 
 import mediapipe.python.solutions.face_mesh as mp_face_mesh
 
@@ -80,28 +80,27 @@ class ComputerVisionEngine(VideoProcessorBase):
         )
         self.consecutive_frames_counter = 0
         self.limit_ear = 0.22
-        self.limit_frames = 15
+        self.limit_frames = 10
         self.last_state = "UNKNOWN"
-        self.frame_skip_index = 0  # Frame counting flag for pipeline drop simulation
+        self.frame_index = 0
 
     def update_runtime_variables(self, threshold_ear, threshold_frames):
         self.limit_ear = threshold_ear
         self.limit_frames = threshold_frames
 
     def recv(self, frame):
-        self.frame_skip_index += 1
+        self.frame_index += 1
         image_matrix = frame.to_ndarray(format="bgr24")
         
-        # --- CRITICAL THROTTLE FIXED: Drop every alternate frame to slash CPU usage in half ---
-        if self.frame_skip_index % 2 != 0:
-            # Yield frame immediately without putting it through heavy ML calculations
+        # --- FREE TIER OPTIMIZATION: Process only 1 out of every 3 frames ---
+        if self.frame_index % 3 != 0:
             return frame.from_ndarray(image_matrix, format="bgr24")
             
-        # Give computing threads breathing room on the shared server cluster
-        time.sleep(0.03) 
+        # Give server CPU a tiny break
+        time.sleep(0.04)
         
         height, width, _ = image_matrix.shape
-        cv2.putText(image_matrix, "SYSTEM CORE: VIGIL-EYE | CLOUD OPTIMIZED MODE", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(image_matrix, "SYSTEM CORE: VIGIL-EYE | FREE TIER SAFE MODE", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
         
         processing_color_space = cv2.cvtColor(image_matrix, cv2.COLOR_BGR2RGB)
         mesh_results = self.mesh_processor.process(processing_color_space)
@@ -145,7 +144,15 @@ with layout_viewport_panel:
         mode=WebRtcMode.SENDRECV,
         rtc_configuration=network_stun_configuration,
         video_processor_factory=ComputerVisionEngine,
-        media_stream_constraints={"video": True, "audio": False},
+        # --- Lower incoming video resolution & FPS directly inside the browser ---
+        media_stream_constraints={
+            "video": {
+                "width": {"ideal": 640},
+                "height": {"ideal": 480},
+                "frameRate": {"ideal": 15}
+            },
+            "audio": False
+        },
         async_processing=True
     )
     
