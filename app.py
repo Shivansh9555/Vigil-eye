@@ -1,170 +1,127 @@
+import av
 import cv2
 import numpy as np
 import streamlit as st
 import mediapipe as mp
-import time
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration, WebRtcMode
 
-# --- Technical UI Architecture Configuration ---
-st.set_page_config(
-    page_title="Vigil-Eye Control Console",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- Presentation UI Setup ---
+st.set_page_config(page_title="Vigil-Eye Panel", layout="wide")
 
-st.markdown("""
-    <style>
-        .main-title { font-size: 2.0rem; font-weight: 700; color: #F8FAFC; margin-bottom: 0.1rem; letter-spacing: -0.025em; }
-        .system-meta { font-size: 0.9rem; color: #94A3B8; margin-bottom: 1.8rem; }
-        .developer-badge { font-family: monospace; font-size: 0.8rem; background-color: #0F172A; padding: 3px 8px; border-radius: 4px; color: #38BDF8; border: 1px solid #1E293B; }
-        .metric-block { background-color: #0B0F19; padding: 16px; border-radius: 6px; border: 1px solid #1E293B; margin-bottom: 12px; }
-        .metric-label { font-size: 0.75rem; font-weight: 600; color: #64748B; letter-spacing: 0.05em; text-transform: uppercase; }
-        .metric-val { font-size: 1.6rem; font-weight: 700; color: #F1F5F9; margin-top: 4px; font-family: monospace; }
-        .stTextArea textarea { font-family: monospace; font-size: 0.85rem; background-color: #05070B !important; color: #38BDF8 !important; border: 1px solid #1E293B !important; }
-        div[data-testid="stSidebar"] { background-color: #090D16; border-right: 1px solid #1E293B; }
-        .stSlider { padding-bottom: 15px; }
-    </style>
-""", unsafe_allow_html=True)
+st.markdown("### Vigil-Eye: Drowsiness Detection System")
+st.markdown("**Developer:** Shivansh | **System Status:** Ready for Evaluation")
+st.markdown("---")
 
-if "system_logs" not in st.session_state:
-    st.session_state.system_logs = f"[{time.strftime('%H:%M:%S')}] INITIALIZATION: Streamlit resource optimization active."
+# Layout Partitioning for Presentation View
+col_camera, col_telemetry = st.columns([2, 1])
 
-st.markdown('<div class="main-title">Vigil-Eye Terminal</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="system-meta">Automated Core Real-Time Drowsiness Tracking Node | '
-    '<span class="developer-badge">Lead Dev: Shivansh</span></div>', 
-    unsafe_allow_html=True
-)
+with col_telemetry:
+    st.markdown("#### Algorithmic Parameters")
+    close_thresh = st.slider("EAR Threshold", 0.15, 0.35, 0.22, 0.01)
+    frame_thresh = st.slider("Consecutive Frame Trigger", 5, 30, 10, 1)
 
-with st.sidebar:
-    st.markdown("### System Constants")
-    close_thresh = st.slider("EAR Threshold Limit", min_value=0.15, max_value=0.35, value=0.22, step=0.01)
-    frame_thresh = st.slider("Consecutive Frame Upper Bound", min_value=5, max_value=30, value=10, step=1)
-    
     st.markdown("---")
-    st.markdown("### Resource Control")
-    st.caption("Free Tier Mode: Low-Power Processing enabled to prevent server-side CPU throttling.")
+    st.markdown("#### System Diagnostics")
+    status_placeholder = st.empty()
+    status_placeholder.info("Awaiting Camera Channel...")
 
-import mediapipe.python.solutions.face_mesh as mp_face_mesh
+# --- MediaPipe & Core Computer Vision Engine ---
+mp_face_mesh = mp.solutions.face_mesh
 
-LEFT_EYE_MAP = [362, 385, 387, 263, 373, 380]
-RIGHT_EYE_MAP = [33, 160, 158, 133, 153, 144]
+LEFT_EYE = [362, 385, 387, 263, 373, 380]
+RIGHT_EYE = [33, 160, 158, 133, 153, 144]
 
-def calculate_vector_magnitude(p1, p2):
-    return np.linalg.norm(np.array(p1) - np.array(p2))
 
-def evaluate_eye_aspect_ratio(landmarks, indices):
-    try:
-        p1 = landmarks[indices[0]]
-        p2 = landmarks[indices[1]]
-        p3 = landmarks[indices[2]]
-        p4 = landmarks[indices[3]]
-        p5 = landmarks[indices[4]]
-        p6 = landmarks[indices[5]]
-        
-        vertical_1 = calculate_vector_magnitude((p2.x, p2.y), (p6.x, p6.y))
-        vertical_2 = calculate_vector_magnitude((p3.x, p3.y), (p5.x, p5.y))
-        horizontal = calculate_vector_magnitude((p1.x, p1.y), (p4.x, p4.y))
-        
-        return (vertical_1 + vertical_2) / (2.0 * horizontal)
-    except IndexError:
-        return 0.28
-
-class ComputerVisionEngine(VideoProcessorBase):
+class DrowsinessEngine(VideoProcessorBase):
     def __init__(self):
-        self.mesh_processor = mp_face_mesh.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+        self.face_mesh = mp_face_mesh.FaceMesh(
+            max_num_faces=1, refine_landmarks=True,
+            min_detection_confidence=0.5, min_tracking_confidence=0.5
         )
-        self.consecutive_frames_counter = 0
-        self.limit_ear = 0.22
-        self.limit_frames = 10
-        self.last_state = "UNKNOWN"
-        self.frame_index = 0
+        self.counter = 0
+        self.ear_limit = 0.22
+        self.frame_limit = 10
+        self.current_state = "STANDBY"
 
-    def update_runtime_variables(self, threshold_ear, threshold_frames):
-        self.limit_ear = threshold_ear
-        self.limit_frames = threshold_frames
+    def update_parameters(self, ear_limit, frame_limit):
+        self.ear_limit = ear_limit
+        self.frame_limit = frame_limit
 
     def recv(self, frame):
-        self.frame_index += 1
-        image_matrix = frame.to_ndarray(format="bgr24")
-        
-        # --- FREE TIER OPTIMIZATION: Process only 1 out of every 3 frames ---
-        if self.frame_index % 3 != 0:
-            return frame.from_ndarray(image_matrix, format="bgr24")
-            
-        # Give server CPU a tiny break
-        time.sleep(0.04)
-        
-        height, width, _ = image_matrix.shape
-        cv2.putText(image_matrix, "SYSTEM CORE: VIGIL-EYE | FREE TIER SAFE MODE", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
-        
-        processing_color_space = cv2.cvtColor(image_matrix, cv2.COLOR_BGR2RGB)
-        mesh_results = self.mesh_processor.process(processing_color_space)
-        
-        if mesh_results.multi_face_landmarks:
-            extracted_landmarks = mesh_results.multi_face_landmarks[0].landmark
-            current_left_ear = evaluate_eye_aspect_ratio(extracted_landmarks, LEFT_EYE_MAP)
-            current_right_ear = evaluate_eye_aspect_ratio(extracted_landmarks, RIGHT_EYE_MAP)
-            computed_average_ear = (current_left_ear + current_right_ear) / 2.0
-            
-            cv2.putText(image_matrix, f"LIVE EAR BOUND: {computed_average_ear:.3f}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (148, 163, 184), 1, cv2.LINE_AA)
-            
-            if computed_average_ear < self.limit_ear:
-                self.consecutive_frames_counter += 1
-                if self.consecutive_frames_counter >= self.limit_frames:
-                    cv2.rectangle(image_matrix, (15, height - 55), (width - 15, height - 15), (0, 0, 255), cv2.FILLED)
-                    cv2.putText(image_matrix, "CRITICAL METRIC EXCEEDED: DROWSINESS SIGNATURE DETECTED", (30, height - 28), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                    self.last_state = "CRITICAL: Drowsiness patterns detected."
+        img = frame.to_ndarray(format="bgr24")
+        h, w, _ = img.shape
+
+        # Burn-in Watermark
+        cv2.putText(img, "Vigil-Eye Engine | Dev: Shivansh", (20, 35),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        results = self.face_mesh.process(rgb)
+
+        if results.multi_face_landmarks:
+            landmarks = results.multi_face_landmarks[0].landmark
+
+            # Helper lambda for clean mathematical distance parsing
+            dist = lambda p1, p2: np.linalg.norm(np.array([p1.x, p1.y]) - np.array([p2.x, p2.y]))
+
+            # Left Eye Aspect Ratio
+            l_v1 = dist(landmarks[LEFT_EYE[1]], landmarks[LEFT_EYE[5]])
+            l_v2 = dist(landmarks[LEFT_EYE[2]], landmarks[LEFT_EYE[4]])
+            l_h = dist(landmarks[LEFT_EYE[0]], landmarks[LEFT_EYE[3]])
+            left_ear = (l_v1 + l_v2) / (2.0 * l_h)
+
+            # Right Eye Aspect Ratio
+            r_v1 = dist(landmarks[RIGHT_EYE[1]], landmarks[RIGHT_EYE[5]])
+            r_v2 = dist(landmarks[RIGHT_EYE[2]], landmarks[RIGHT_EYE[4]])
+            r_h = dist(landmarks[RIGHT_EYE[0]], landmarks[RIGHT_EYE[3]])
+            right_ear = (r_v1 + r_v2) / (2.0 * r_h)
+
+            avg_ear = (left_ear + right_ear) / 2.0
+            cv2.putText(img, f"Live EAR: {avg_ear:.3f}", (20, 65),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+
+            # Drowsiness logic processing boundary
+            if avg_ear < self.ear_limit:
+                self.counter += 1
+                if self.counter >= self.frame_limit:
+                    cv2.rectangle(img, (15, h - 55), (w - 15, h - 15), (0, 0, 255), cv2.FILLED)
+                    cv2.putText(img, "CRITICAL: DROWSINESS DETECTED", (30, h - 25),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                    self.current_state = "ALERT"
             else:
-                self.consecutive_frames_counter = 0
-                cv2.putText(image_matrix, "STATE STATUS: NOMINAL (MONITORING ACTIVE)", (20, height - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (34, 197, 94), 1, cv2.LINE_AA)
-                self.last_state = "NOMINAL: Operator attention verified."
+                self.counter = 0
+                cv2.putText(img, "STATE: ACTIVE & MONITORING", (20, h - 25),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+                self.current_state = "NOMINAL"
         else:
-            cv2.putText(image_matrix, "STATE STATUS: ERROR (SIGNAL ACQUISITION LOST)", (20, height - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (234, 179, 8), 1, cv2.LINE_AA)
-            self.last_state = "ERROR: Tracking loss - face coordinates unmapped."
-            
-        return frame.from_ndarray(image_matrix, format="bgr24")
+            cv2.putText(img, "STATE: LOSS OF SIGNAL", (20, h - 25),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 165, 255), 1, cv2.LINE_AA)
+            self.current_state = "LOST"
 
-layout_viewport_panel, layout_telemetry_panel = st.columns([2.6, 1])
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-with layout_telemetry_panel:
-    st.markdown("### Console Telemetry")
-    st.markdown(f'<div class="metric-block"><div class="metric-label">Assigned EAR Limit</div><div class="metric-val">{close_thresh:.2f}</div></div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="metric-block"><div class="metric-label">Alert Frame Limit</div><div class="metric-val">{frame_thresh} Frm</div></div>', unsafe_allow_html=True)
 
-with layout_viewport_panel:
-    network_stun_configuration = RTCConfiguration({"iceServers": [{"urls": ["stun:://google.com"]}]})
-    
-    stream_context = webrtc_streamer(
-        key="vigil-eye-cv-node",
+with col_camera:
+    rtc_config = RTCConfiguration({
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    })
+
+    ctx = webrtc_streamer(
+        key="vigil-eye-node",
         mode=WebRtcMode.SENDRECV,
-        rtc_configuration=network_stun_configuration,
-        video_processor_factory=ComputerVisionEngine,
-        # --- Lower incoming video resolution & FPS directly inside the browser ---
-        media_stream_constraints={
-            "video": {
-                "width": {"ideal": 640},
-                "height": {"ideal": 480},
-                "frameRate": {"ideal": 15}
-            },
-            "audio": False
-        },
-        async_processing=True
+        rtc_configuration=rtc_config,
+        video_processor_factory=DrowsinessEngine,
+        media_stream_constraints={"video": {"width": 640, "height": 480, "frameRate": 15}, "audio": False},
+        async_processing=True,
     )
-    
-    if stream_context.video_processor:
-        stream_context.video_processor.update_runtime_variables(close_thresh, frame_thresh)
-        engine_state = stream_context.video_processor.last_state
-        current_time_stamp = time.strftime('%H:%M:%S')
-        new_entry = f"[{current_time_stamp}] {engine_state}"
-        
-        if not st.session_state.system_logs.split('\n')[-1].endswith(engine_state):
-            st.session_state.system_logs += f"\n{new_entry}"
 
-st.markdown("---")
-st.markdown("### System Telemetry Log Stream")
-st.text_area(label="Live Process Diagnostics Log Console", value=st.session_state.system_logs, height=160, disabled=True, label_visibility="collapsed")
+    if ctx.video_processor:
+        ctx.video_processor.update_parameters(close_thresh, frame_thresh)
+
+        state = ctx.video_processor.current_state
+        if state == "ALERT":
+            status_placeholder.error("CRITICAL STATUS: Drowsiness Identified.")
+        elif state == "NOMINAL":
+            status_placeholder.success("SYSTEM STATUS: Active Monitoring.")
+        elif state == "LOST":
+            status_placeholder.warning("SYSTEM STATUS: Searching For Face Coordinates.")
